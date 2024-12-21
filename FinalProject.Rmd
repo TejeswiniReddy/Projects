@@ -1,0 +1,629 @@
+---
+title: "Final Project Code - Team002"
+author: "Tejeswini (Person #: 50606824,UBitName: tejeswin), Shashank(Person #: 50604151,UBitName: smankala)"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Requirements}
+library(dplyr)
+library(ROSE)
+library(caret)
+library(mice)
+library(corrplot)
+library(rpart)
+library(rpart.plot)
+library(xgboost)
+library(pROC)
+library(class)
+library(randomForest)
+library(forcats)
+
+
+```
+
+```{r Data Loading}
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+data <- read.csv("Dataset/raw_data.csv")
+
+head(data)
+
+str(data)
+```
+
+
+
+
+```{r Data Cleaning}
+numerical_features <- data[, sapply(data, is.numeric)]
+
+categorical_features <- data[, sapply(data, is.character)]
+
+missing_summary <- colSums(is.na(data))
+missing_summary[missing_summary > 0]
+
+
+physicalhealthpredictors <- c("MentalHealthDays", "GeneralHealth", "AgeCategory", "SleepHours", "Sex")
+
+impute_data <- data[, c("PhysicalHealthDays", physicalhealthpredictors)]
+
+imputed_data <- mice(impute_data, method = "pmm", m = 5, seed = 123)
+
+completed_data <- complete(imputed_data, 1)
+
+data$PhysicalHealthDays <- completed_data$PhysicalHealthDays
+data$MentalHealthDays <- completed_data$MentalHealthDays
+data$SleepHours <- completed_data$SleepHours
+
+data$SleepHours <- ifelse(data$SleepHours > 16, 16, data$SleepHours)
+
+impute_data <- data[, c("HeightInMeters", "Sex", "AgeCategory", "WeightInKilograms", "BMI")]
+imputed_data <- mice(impute_data, method = "pmm", m = 5, seed = 123)
+
+completed_data <- complete(imputed_data, 1)
+
+data$HeightInMeters <- completed_data$HeightInMeters
+data$HeightInMeters <- ifelse(data$HeightInMeters > 2.3, 2.3, ifelse(data$HeightInMeters < 1.0, 1.0, data$HeightInMeters))
+
+data$WeightInKilograms <- completed_data$WeightInKilograms
+data$WeightInKilograms <- ifelse(data$WeightInKilograms > 200, 200, ifelse(data$WeightInKilograms < 30, 30, data$WeightInKilograms))
+
+data$BMI <- ifelse(is.na(data$BMI), data$WeightInKilograms / (data$HeightInMeters^2), data$BMI)
+
+data$HadHeartAttack[data$HadHeartAttack == ""] <- NA
+
+data <- data[!is.na(data$HadHeartAttack), ]
+
+t.test(data$BMI ~ data$HadHeartAttack)
+t.test(data$WeightInKilograms ~ data$HadHeartAttack)
+chisq.test(table(data$SmokerStatus, data$HadHeartAttack))
+
+
+table(data$AgeCategory, data$HadHeartAttack)
+table(data$GeneralHealth, data$HadHeartAttack)
+
+chisq.test(table(data$AgeCategory, data$HadHeartAttack))
+chisq.test(table(data$GeneralHealth, data$HadHeartAttack))
+
+t.test(data$SleepHours ~ data$HadHeartAttack)
+
+table(data$HadDiabetes, data$HadHeartAttack)
+chisq.test(table(data$HadDiabetes, data$HadHeartAttack))
+
+
+table(data$PhysicalActivities, data$HadHeartAttack)
+chisq.test(table(data$PhysicalActivities, data$HadHeartAttack))
+
+
+table(data$HadStroke, data$HadHeartAttack)
+chisq.test(table(data$HadStroke, data$HadHeartAttack))
+
+data$PhysicalActivities[data$PhysicalActivities == ""] <- NA
+data$HadStroke[data$HadStroke == ""] <- NA
+
+colSums(is.na(data[, c("PhysicalActivities", "HadStroke")]))
+
+
+mode_impute <- function(x) {
+  ux <- unique(na.omit(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+mode_pa <- mode_impute(data$PhysicalActivities)
+data$PhysicalActivities[is.na(data$PhysicalActivities)] <- mode_pa
+
+mode_hs <- mode_impute(data$HadStroke)
+data$HadStroke[is.na(data$HadStroke)] <- mode_hs
+
+colSums(is.na(data[, c("PhysicalActivities", "HadStroke")]))
+
+
+table(data$SmokerStatus, data$HadHeartAttack)
+chisq.test(table(data$SmokerStatus, data$HadHeartAttack))
+
+
+data$SmokerStatus[data$SmokerStatus == ""] <- NA
+sum(is.na(data$SmokerStatus))
+
+
+mode_smoker <- names(which.max(table(data$SmokerStatus, useNA = "no")))
+
+data$SmokerStatus[is.na(data$SmokerStatus)] <- mode_smoker
+
+table(data$SmokerStatus, data$HadHeartAttack)
+chisq.test(table(data$SmokerStatus, data$HadHeartAttack))
+
+
+
+data[data == ""] <- NA
+
+colSums(is.na(data))
+
+mode_general_health <- names(which.max(table(data$GeneralHealth, useNA = "no")))
+
+
+data$GeneralHealth[is.na(data$GeneralHealth)] <- mode_general_health
+
+
+mode_checkup <- names(which.max(table(data$LastCheckupTime, useNA = "no")))
+data$LastCheckupTime[is.na(data$LastCheckupTime)] <- mode_checkup
+data <- data[!is.na(data$HadAngina) & !is.na(data$AgeCategory), ]
+
+
+colSums(is.na(data))
+
+mode_impute <- function(x) {
+  ux <- unique(na.omit(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+data$HadAsthma[is.na(data$HadAsthma)] <- mode_impute(data$HadAsthma)
+data$HadSkinCancer[is.na(data$HadSkinCancer)] <- mode_impute(data$HadSkinCancer)
+data$HadCOPD[is.na(data$HadCOPD)] <- mode_impute(data$HadCOPD)
+data$RemovedTeeth[is.na(data$RemovedTeeth)] <- mode_impute(data$RemovedTeeth)
+data$RaceEthnicityCategory[is.na(data$RaceEthnicityCategory)] <- mode_impute(data$RaceEthnicityCategory)
+
+
+data <- data[, !(colnames(data) %in% c("ChestScan", "AlcoholDrinkers", "PneumoVaxEver", "CovidPos"))]
+
+colSums(is.na(data))
+
+
+data$HadDepressiveDisorder[is.na(data$HadDepressiveDisorder)] <- mode_impute(data$HadDepressiveDisorder)
+data$HadKidneyDisease[is.na(data$HadKidneyDisease)] <- mode_impute(data$HadKidneyDisease)
+data$HadArthritis[is.na(data$HadArthritis)] <- mode_impute(data$HadArthritis)
+data$DeafOrHardOfHearing[is.na(data$DeafOrHardOfHearing)] <- mode_impute(data$DeafOrHardOfHearing)
+data$BlindOrVisionDifficulty[is.na(data$BlindOrVisionDifficulty)] <- mode_impute(data$BlindOrVisionDifficulty)
+
+
+data <- data[, !(colnames(data) %in% c("DifficultyConcentrating", "DifficultyWalking",
+                                       "DifficultyDressingBathing", "DifficultyErrands",
+                                       "ECigaretteUsage", "HIVTesting", "FluVaxLast12",
+                                       "TetanusLast10Tdap", "HighRiskLastYear"))]
+
+
+colSums(is.na(data))
+
+mode_diabetes <- names(which.max(table(data$HadDiabetes, useNA = "no")))
+
+data$HadDiabetes[is.na(data$HadDiabetes)] <- mode_diabetes
+
+colSums(is.na(data))
+
+
+```
+
+```{r EDA}
+
+table(data$HadHeartAttack)
+
+
+barplot(table(data$HadHeartAttack), main = "Distribution of HadHeartAttack", xlab = "Heart Attack", ylab = "Count", col = "blue")
+
+barplot(table(data$AgeCategory, data$HadHeartAttack), beside = TRUE, legend = TRUE, main = "AgeCategory vs. HadHeartAttack", xlab = "Age Category", ylab = "Count")
+
+
+barplot(table(data$SmokerStatus, data$HadHeartAttack), beside = TRUE, legend = TRUE, main = "SmokerStatus vs. HadHeartAttack", xlab = "Smoker Status", ylab = "Count")
+
+
+barplot(table(data$GeneralHealth, data$HadHeartAttack), beside = TRUE, legend = TRUE, main = "GeneralHealth vs. HadHeartAttack", xlab = "General Health", ylab = "Count")
+
+
+barplot(table(data$BMI, data$HadHeartAttack), beside = TRUE, legend = FALSE, main = "BMI vs. HadHeartAttack", xlab = "BMI", ylab = "Count")
+
+
+t.test(data$BMI ~ data$HadHeartAttack)
+t.test(data$WeightInKilograms ~ data$HadHeartAttack)
+t.test(data$HeightInMeters ~ data$HadHeartAttack)
+
+
+boxplot(data$BMI ~ data$HadHeartAttack, main = "BMI vs. HadHeartAttack", xlab = "HadHeartAttack", ylab = "BMI", col = "orange")
+boxplot(data$WeightInKilograms ~ data$HadHeartAttack, main = "Weight vs. HadHeartAttack", xlab = "HadHeartAttack", ylab = "Weight (kg)", col = "green")
+
+
+continuous_vars <- data[, sapply(data, is.numeric)]
+
+cor_matrix <- cor(continuous_vars, use = "complete.obs")
+
+
+corrplot(cor_matrix, method = "color", addCoef.col = "black", tl.cex = 0.7, number.cex = 0.7)
+
+
+boxplot(data$HeightInMeters ~ data$HadHeartAttack, main = "Height vs. HadHeartAttack", xlab = "HadHeartAttack", ylab = "Height (m)", col = "blue")
+
+
+balanced_data <- ovun.sample(HadHeartAttack ~ ., data = data, method = "both", p = 0.5, seed = 123)$data
+table(balanced_data$HadHeartAttack)
+
+interaction_data <- table(data$AgeCategory, data$SmokerStatus, data$HadHeartAttack)
+
+
+agg_data <- aggregate(data$HadHeartAttack == "Yes", by = list(AgeCategory = data$AgeCategory, SmokerStatus = data$SmokerStatus), FUN = sum)
+
+
+colnames(agg_data) <- c("AgeCategory", "SmokerStatus", "HeartAttackCount")
+
+
+interaction.plot(x.factor = agg_data$AgeCategory, 
+                 trace.factor = agg_data$SmokerStatus, 
+                 response = agg_data$HeartAttackCount,
+                 main = "Interaction: AgeCategory & SmokerStatus",
+                 xlab = "Age Category", ylab = "Heart Attack Count", 
+                 col = c("blue", "red", "green", "orange"),
+                 legend = TRUE)
+
+```
+
+
+```{r Preprocessing Modeling Data}
+
+data$HadHeartAttack <- as.factor(data$HadHeartAttack)
+
+categorical_vars <- c("AgeCategory", "SmokerStatus", "GeneralHealth", "PhysicalActivities")
+data[categorical_vars] <- lapply(data[categorical_vars], as.factor)
+
+set.seed(123)
+train_index <- sample(1:nrow(data), size = 0.7 * nrow(data))
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+
+```
+
+
+```{r Logistic Regression}
+
+logit_model <- glm(HadHeartAttack ~ ., data = train_data, family = binomial)
+
+summary(logit_model)
+
+pred_prob <- predict(logit_model, newdata = test_data, type = "response")
+
+pred_class <- ifelse(pred_prob > 0.5, "Yes", "No")
+
+conf_matrix <- table(Predicted = pred_class, Actual = test_data$HadHeartAttack)
+print(conf_matrix)
+
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+precision <- conf_matrix[2, 2] / sum(conf_matrix[, 2])
+recall <- conf_matrix[2, 2] / sum(conf_matrix[2, ])
+f1_score <- 2 * ((precision * recall) / (precision + recall))
+
+
+cat("Final Model Metrics:\n")
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+
+```
+
+```{r}
+
+rf_model <- randomForest(HadHeartAttack ~ ., data = train_data, ntree = 100)
+
+prob_predictions <- predict(rf_model, newdata = test_data, type = "prob")
+
+tuned_predictions <- ifelse(prob_predictions[, "Yes"] > 0.4, "Yes", "No")
+tuned_predictions <- factor(tuned_predictions, levels = c("No", "Yes"))
+
+
+conf_matrix_tuned <- table(Predicted = tuned_predictions, Actual = test_data$HadHeartAttack)
+print("Confusion Matrix:")
+print(conf_matrix_tuned)
+
+TP <- conf_matrix_tuned["Yes", "Yes"]
+TN <- conf_matrix_tuned["No", "No"]
+FP <- conf_matrix_tuned["Yes", "No"]
+FN <- conf_matrix_tuned["No", "Yes"]
+
+accuracy <- (TP + TN) / sum(conf_matrix_tuned)
+precision <- TP / (TP + FP)
+recall <- TP / (TP + FN)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+
+
+roc_curve <- roc(test_data$HadHeartAttack, prob_predictions[, "Yes"])
+auc_value <- auc(roc_curve)
+cat("AUC-ROC:", auc_value, "\n")
+
+plot(roc_curve, col = "blue", main = "AUC-ROC Curve for Random Forest")
+abline(a = 0, b = 1, lty = 2, col = "red")
+
+```
+
+
+
+```{r xgboost}
+train_matrix <- model.matrix(HadHeartAttack ~ . - 1, data = train_data)
+test_matrix <- model.matrix(HadHeartAttack ~ . - 1, data = test_data)
+
+train_label <- ifelse(train_data$HadHeartAttack == "Yes", 1, 0)
+test_label <- ifelse(test_data$HadHeartAttack == "Yes", 1, 0)
+
+xgb_model <- xgboost(data = train_matrix, label = train_label, nrounds = 100, objective = "binary:logistic", scale_pos_weight = 5)
+
+xgb_pred_prob <- predict(xgb_model, newdata = test_matrix)
+xgb_pred <- ifelse(xgb_pred_prob > 0.5, "Yes", "No")
+
+summary(xgb_model)
+
+xgb_conf_matrix <- table(Predicted = xgb_pred, Actual = test_data$HadHeartAttack)
+print(xgb_conf_matrix)
+
+
+TP <- xgb_conf_matrix["Yes", "Yes"]
+TN <- xgb_conf_matrix["No", "No"]
+FP <- xgb_conf_matrix["Yes", "No"]
+FN <- xgb_conf_matrix["No", "Yes"]
+
+accuracy <- (TP + TN) / sum(xgb_conf_matrix)
+precision <- TP / (TP + FP)
+recall <- TP / (TP + FN)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+
+```
+
+
+```{r}
+roc_curve <- roc(test_data$HadHeartAttack, pred_prob)
+plot(roc_curve, col = "blue", main = "ROC Curve")
+auc(roc_curve)
+```
+
+
+
+```{r Decision Trees}
+
+tree_model <- rpart(HadHeartAttack ~ ., data = train_data, method = "class", control = rpart.control(minsplit = 20, cp = 0.01))
+
+summary(tree_model)
+
+rpart.plot(tree_model, type = 3, extra = 1, under = TRUE, main = "Decision Tree for Heart Attack Prediction")
+
+tree_pred <- predict(tree_model, newdata = test_data, type = "class")
+
+tree_conf_matrix <- table(Predicted = tree_pred, Actual = test_data$HadHeartAttack)
+print(tree_conf_matrix)
+
+
+tree_accuracy <- sum(diag(tree_conf_matrix)) / sum(tree_conf_matrix)
+cat("Decision Tree Accuracy:", tree_accuracy, "\n")
+
+cat("Complexity Parameter: ")
+printcp(tree_model)
+
+plotcp(tree_model)
+
+optimal_cp <- tree_model$cptable[which.min(tree_model$cptable[,"xerror"]), "CP"]
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+
+rpart.plot(pruned_tree, type = 3, extra = 1, under = TRUE, main = "Pruned Decision Tree")
+
+
+pruned_tree_pred <- predict(pruned_tree, newdata = test_data, type = "class")
+
+pruned_tree_conf_matrix <- table(Predicted = pruned_tree_pred, Actual = test_data$HadHeartAttack)
+print(pruned_tree_conf_matrix)
+
+
+TP <- pruned_tree_conf_matrix["Yes", "Yes"]
+TN <- pruned_tree_conf_matrix["No", "No"]
+FP <- pruned_tree_conf_matrix["Yes", "No"]
+FN <- pruned_tree_conf_matrix["No", "Yes"]
+
+accuracy <- (TP + TN) / sum(pruned_tree_conf_matrix)
+precision <- TP / (TP + FP)
+recall <- TP / (TP + FN)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+
+```
+
+
+
+```{r KNN Classification}
+
+numeric_features <- names(train_data)[sapply(train_data, is.numeric)]
+
+train_data_scaled <- as.data.frame(scale(train_data[, numeric_features]))
+test_data_scaled <- as.data.frame(scale(test_data[, numeric_features]))
+
+train_data_scaled$HadHeartAttack <- train_data$HadHeartAttack
+test_data_scaled$HadHeartAttack <- test_data$HadHeartAttack
+
+train_x <- train_data_scaled[, numeric_features]
+test_x <- test_data_scaled[, numeric_features]
+train_y <- train_data_scaled$HadHeartAttack
+test_y <- test_data_scaled$HadHeartAttack
+
+set.seed(123)
+knn_pred <- knn(train = train_x, test = test_x, cl = train_y, k = 5)
+
+knn_conf_matrix <- table(Predicted = knn_pred, Actual = test_y)
+print(knn_conf_matrix)
+
+TP <- knn_conf_matrix["Yes", "Yes"]
+TN <- knn_conf_matrix["No", "No"]
+FP <- knn_conf_matrix["Yes", "No"]
+FN <- knn_conf_matrix["No", "Yes"]
+
+accuracy <- (TP + TN) / sum(knn_conf_matrix)
+precision <- TP / (TP + FP)
+recall <- TP / (TP + FN)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+cat("Accuracy:", accuracy, "\n")
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+
+```
+
+
+
+```{r Random Forest Tuning}
+
+set.seed(123)
+
+split_index <- createDataPartition(data$HadHeartAttack, p = 0.7, list = FALSE)
+
+train_data <- data[split_index, ]
+test_data <- data[-split_index, ]
+
+tune_grid <- expand.grid(
+  mtry = c(5, 10),
+  ntree = c(50, 100),
+  nodesize = c(5, 10),
+  maxnodes = c(10, 20)
+)
+
+results <- data.frame()
+
+for (i in 1:nrow(tune_grid)) {
+  print(tune_grid[i,])
+  params <- tune_grid[i, ]
+
+  set.seed(123)
+  
+  rf_model <- randomForest(
+    HadHeartAttack ~ .,
+    data = train_data,
+    mtry = params$mtry,
+    ntree = params$ntree,
+    nodesize = params$nodesize,
+    maxnodes = params$maxnodes
+  )
+  
+  rf_pred <- predict(rf_model, newdata = test_data)
+  conf_matrix <- table(Predicted = rf_pred, Actual = test_data$HadHeartAttack)
+  accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+
+  
+  results <- rbind(
+    results,
+    data.frame(
+      mtry = params$mtry,
+      ntree = params$ntree,
+      nodesize = params$nodesize,
+      maxnodes = params$maxnodes,
+      accuracy = accuracy
+    )
+  )
+}
+
+
+best_params <- results[which.max(results$accuracy), ]
+print(best_params)
+print(which.max(results$accuracy))
+
+```
+
+
+
+```{r k-fold validation}
+
+set.seed(123) 
+k_folds <- trainControl(method = "cv", number = 3, verboseIter = TRUE)
+
+rf_model <- train(
+  HadHeartAttack ~ ., 
+  data = train_data, 
+  method = "rf", 
+  ntree = 100,
+  tuneGrid = expand.grid(mtry = 10),
+  trControl = k_folds
+)
+
+
+print(rf_model)
+
+cat("Cross-Validated Accuracy:", rf_model$results$Accuracy[1], "\n")
+
+```
+
+
+
+
+```{r Testing Data}
+
+rf_test_pred <- predict(rf_model, newdata = test_data)
+test_conf_matrix <- table(Predicted = rf_test_pred, Actual = test_data$HadHeartAttack)
+print(test_conf_matrix)
+
+test_accuracy <- sum(diag(test_conf_matrix)) / sum(test_conf_matrix)
+cat("Test Accuracy:", test_accuracy, "\n")
+```
+
+
+
+```{r SMOTE}
+
+train_data <- train_data %>% mutate(across(where(is.character), as.factor))
+train_data$date_column <- NULL 
+
+
+rose_data <- ROSE(HadHeartAttack ~ ., data = train_data, seed = 123)$data
+rose_data$State <- fct_lump(rose_data$State, n = 53)
+rose_data$State <- NULL
+sapply(rose_data, function(x) if (is.factor(x)) length(unique(x)) else NA)
+
+rf_model_rose <- randomForest(
+  HadHeartAttack ~ ., 
+  data = rose_data, 
+  ntree = 100, 
+  mtry = 10
+)
+
+
+rf_pred <- predict(rf_model, newdata = test_data)
+
+
+conf_matrix <- table(Predicted = rf_pred, Actual = test_data$HadHeartAttack)
+print(conf_matrix)
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+cat("Accuracy:", accuracy, "\n")
+
+TP <- conf_matrix["Yes", "Yes"]
+TN <- conf_matrix["No", "No"]
+FP <- conf_matrix["Yes", "No"]
+FN <- conf_matrix["No", "Yes"]
+
+
+precision <- TP / (TP + FP)
+recall <- TP / (TP + FN)
+f1_score <- 2 * (precision * recall) / (precision + recall)
+specificity <- TN / (TN + FP)
+
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("Specificity:", specificity, "\n")
+```
+
+
+
+
+
+
